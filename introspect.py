@@ -4,11 +4,11 @@ things like call tips and command auto completion.
 NOTE: this file is a modification of Patrick O'Brien's version 1.62
 """
 
-from __future__ import nested_scopes
+#from __future__ import nested_scopes
 
 __author__ = "Patrick K. O'Brien <pobrien@orbtech.com>"
-__cvsid__ = "$Id: introspect.py,v 1.5 2003/05/01 03:43:53 dcoleman Exp $"
-__revision__ = "$Revision: 1.5 $"[11:-2]
+__cvsid__ = "$Id: introspect.py 5910 2006-06-20 10:03:31Z jmvivo $"
+__revision__ = "$Revision: 5910 $"[11:-2]
 
 
 import cStringIO
@@ -84,12 +84,14 @@ def getAllAttributeNames(object):
     
     Recursively walk through a class and all base classes.
     """
+    #print "getAllAttributeNames  1",repr(object), repr(str(object))
     attrdict = {}  # (object, technique, count): [list of attributes]
     # !!!
     # Do Not use hasattr() as a test anywhere in this function,
     # because it is unreliable with remote objects: xmlrpc, soap, etc.
     # They always return true for hasattr().
     # !!!
+    #print "getAllAttributeNames  2"
     try:
         # Yes, this can fail if object is an instance of a class with
         # __str__ (or __repr__) having a bug or raising an
@@ -98,11 +100,15 @@ def getAllAttributeNames(object):
     except:
         key = 'anonymous'
     # Wake up sleepy objects - a hack for ZODB objects in "ghost" state.
+    #print "getAllAttributeNames  3"
     wakeupcall = dir(object)
+    #print "getAllAttributeNames  4"
     del wakeupcall
     # Get attributes available through the normal convention.
+    #print "getAllAttributeNames  5"
     attributes = dir(object)
     attrdict[(key, 'dir', len(attributes))] = attributes
+    #print "getAllAttributeNames  6"
     # Get attributes from the object's dictionary, if it has one.
     try:
         attributes = object.__dict__.keys()
@@ -112,17 +118,19 @@ def getAllAttributeNames(object):
     else:
         attrdict[(key, '__dict__', len(attributes))] = attributes
     # For a class instance, get the attributes for the class.
+    #print "getAllAttributeNames  7"
     try:
         klass = object.__class__
     except:  # Must catch all because object might have __getattr__.
         pass
     else:
-        if klass is object:
+        if klass is object or klass is type:
             # Break a circular reference. This happens with extension
             # classes.
             pass
         else:
             attrdict.update(getAllAttributeNames(klass))
+    #print "getAllAttributeNames  8"
     # Also get attributes from any and all parent classes.
     try:
         bases = object.__bases__
@@ -134,11 +142,9 @@ def getAllAttributeNames(object):
                 if type(base) is types.TypeType:
                     # Break a circular reference. Happens in Python 2.2.
                     pass
-                if type(base) is type(type):
-                    # Break a circular reference. Happens in Jython 2.2b1.
-                    pass    
                 else:
                     attrdict.update(getAllAttributeNames(base))
+    #print "getAllAttributeNames  attrdict=",repr(attrdict)
     return attrdict
 
 def getCallTip(command='', locals=None):
@@ -282,6 +288,13 @@ def getRoot(command, terminator=None):
         root = prefix + root
     return root    
 
+class _EaterTokens:
+  def __init__(self,tokens):
+    self.tokens = tokens
+
+  def __call__(self,*args):
+    self.tokens.append(args)
+
 def getTokens(command):
     """Return list of token tuples for command."""
     command = str(command)  # In case the command is unicode, which fails.
@@ -297,10 +310,11 @@ def getTokens(command):
 ##
 ##        for token in tokenize.generate_tokens(f.readline):
 ##            tokens.append(token)
-
         # This works with Python 2.1.3 (with nested_scopes).
-        def eater(*args):
-            tokens.append(args)
+##        def eater(*args):
+##            tokens.append(args)
+##        tokenize.tokenize_loop(f.readline, eater)
+        eater = _EaterTokens(tokens) #Con una lambda no se lo come 
         tokenize.tokenize_loop(f.readline, eater)
     except tokenize.TokenError:
         # This is due to a premature EOF, which we expect since we are

@@ -4,14 +4,10 @@ Jython Console with Code Completion
 This uses the basic Jython Interactive Interpreter.
 The UI uses code from Carlos Quiroz's 'Jython Interpreter for JEdit' http://www.jedit.org
 """
-
-from javax.swing import JFrame, JScrollPane, JTextPane, Action, KeyStroke, WindowConstants
+from javax.swing import JFrame, JScrollPane, JWindow, JTextPane, Action, KeyStroke, WindowConstants
 from javax.swing.text import JTextComponent, TextAction, SimpleAttributeSet, StyleConstants
-from java.awt import Color, Font, Point
+from java.awt import Color, Font, FontMetrics, Point
 from java.awt.event import  InputEvent, KeyEvent, WindowAdapter
-from java.lang import System
-from java.awt import Toolkit
-from java.awt.datatransfer import DataFlavor
 
 import jintrospect
 from popup import Popup
@@ -19,90 +15,99 @@ from tip import Tip
 from history import History
 
 import sys
+import traceback
 from code import InteractiveInterpreter
 from org.python.util import InteractiveConsole
 
 __author__ = "Don Coleman <dcoleman@chariotsolutions.com>"
+__cvsid__ = "$Id: console.py 5910 2006-06-20 10:03:31Z jmvivo $"
 
-import re
-# allows multiple imports like "from java.lang import String, Properties"
-_re_from_import = re.compile("from\s+\S+\s+import(\s+\S+,\s?)?")
+def debug(name, value=None):
+    if value == None:
+        print >> sys.stderr, name
+    else:
+        print >> sys.stderr, "%s = %s" % (name, value)
 
-try:
-    True, False
-except NameError:
-    (True, False) = (1, 0)
+if not hasattr(sys,"ps1"):
+    sys.ps1 ='>>> '
+    sys.ps2 ='... '
 
 class Console:
     PROMPT = sys.ps1
     PROCESS = sys.ps2
     BANNER = ["Jython Completion Shell", InteractiveConsole.getDefaultBanner()]
-  
-    include_single_underscore_methods = False
-    include_double_underscore_methods = False
 
-    def __init__(self, namespace=None):
-        """
-            Create a Jython Console.
-            namespace is an optional and should be a dictionary or Map
-        """
+    def __init__(self, frame):
+
+        self.frame = frame # TODO do I need a reference to frame after the constructor?
         self.history = History(self)
+        self.promptPosition = 0
 
-        if namespace != None:
-            self.locals = namespace
-        else:
-            self.locals = {}
-
-        self.buffer = [] # buffer for multi-line commands                    
+        # command buffer
+        self.buffer = []
+        self.locals = {}
+        #self.locals = {"gvSIG":sys.gvSIG}
 
         self.interp = Interpreter(self, self.locals)
         sys.stdout = StdOutRedirector(self)
 
-        self.text_pane = JTextPane(keyTyped = self.keyTyped, keyPressed = self.keyPressed)
-        self.__initKeyMap()
+        # create a textpane
+        self.textpane = JTextPane(keyTyped = self.keyTyped, keyPressed = self.keyPressed)
 
-        self.doc = self.text_pane.document
+        # CTRL UP AND DOWN don't work
+        keyBindings = [
+            (KeyEvent.VK_ENTER, 0, "jython.enter", self.enter),
+            (KeyEvent.VK_DELETE, 0, "jython.delete", self.delete),
+            (KeyEvent.VK_BACK_SPACE, 0, "jython.backspace", self.backspace),
+            (KeyEvent.VK_HOME, 0, "jython.home", self.home),
+            (KeyEvent.VK_UP, 0, "jython.up", self.history.historyUp),
+            (KeyEvent.VK_DOWN, 0, "jython.down", self.history.historyDown),
+            (KeyEvent.VK_PERIOD, 0, "jython.showPopup", self.showPopup),
+            (KeyEvent.VK_ESCAPE, 0, "jython.hide", self.hide),
+            
+            ('(', 0, "jython.showTip", self.showTip),
+            (')', 0, "jython.hideTip", self.hideTip),
+                        ]
+        # TODO rename newmap to keymap
+        newmap = JTextComponent.addKeymap("jython", self.textpane.keymap)
+        for (key, modifier, name, function) in keyBindings:
+            newmap.addActionForKeyStroke(KeyStroke.getKeyStroke(key, modifier), ActionDelegator(name, function))
+
+        self.textpane.keymap = newmap
+                
+        self.doc = self.textpane.document
         self.__propertiesChanged()
         self.__inittext()
         self.initialLocation = self.doc.createPosition(self.doc.length-1)
 
         # Don't pass frame to popups. JWindows with null owners are not focusable
         # this fixes the focus problem on Win32, but make the mouse problem worse
-        self.popup = Popup(None, self.text_pane)
+        self.popup = Popup(None, self.textpane)
         self.tip = Tip(None)
 
         # get fontmetrics info so we can position the popup
-        metrics = self.text_pane.getFontMetrics(self.text_pane.getFont())
+        metrics = self.textpane.getFontMetrics(self.textpane.getFont())
         self.dotWidth = metrics.charWidth('.')
         self.textHeight = metrics.getHeight()
 
         # add some handles to our objects
         self.locals['console'] = self
 
-    def insertText(self, text):
-        """insert text at the current caret position"""
-        # seems like there should be a better way to do this....
-        # might be better as a method on the text component?
-        caretPosition = self.text_pane.getCaretPosition()
-        self.text_pane.select(caretPosition, caretPosition)
-        self.text_pane.replaceSelection(text)
-        self.text_pane.setCaretPosition(caretPosition + len(text))
+        self.caret = self.textpane.getCaret()
 
-    def getText(self):
-        """get text from last line of console"""
+    # TODO refactor me
+    def getinput(self):
         offsets = self.__lastLine()
         text = self.doc.getText(offsets[0], offsets[1]-offsets[0])
-        return text.rstrip()
+        return text
 
     def getDisplayPoint(self):
         """Get the point where the popup window should be displayed"""
-        screenPoint = self.text_pane.getLocationOnScreen()
-        caretPoint = self.text_pane.caret.getMagicCaretPosition()
+        screenPoint = self.textpane.getLocationOnScreen()
+        caretPoint = self.textpane.caret.getMagicCaretPosition()
 
-        # BUG: sometimes caretPoint is None
-        # To duplicate type "java.aw" and hit '.' to complete selection while popup is visible
-
-        x = screenPoint.getX() + caretPoint.getX() + self.dotWidth
+        # TODO use SwingUtils to do this translation
+        x = screenPoint.getX() + caretPoint.getX() + self.dotWidth 
         y = screenPoint.getY() + caretPoint.getY() + self.textHeight
         return Point(int(x),int(y))
 
@@ -115,7 +120,8 @@ class Console:
 
     def hideTip(self, event=None):
         self.tip.hide()
-        self.insertText(')')
+        # TODO this needs to insert ')' at caret!
+        self.write(')')
 
     def showTip(self, event=None):
         # get the display point before writing text
@@ -125,42 +131,84 @@ class Console:
         if self.popup.visible:
             self.popup.hide()
         
-        line = self.getText()
+        line = self.getinput()
+        #debug("line", line)
+        # Hack 'o rama
+        line = line[:-1] # remove \n
+        line += '('
+        #debug("line", line)
 
-        self.insertText('(')
+        # TODO this needs to insert '(' at caret!
+        self.write('(')
         
         (name, argspec, tip) = jintrospect.getCallTipJava(line, self.locals)
+        #debug("name", name)
+        #debug("argspec", argspec)
+        #debug("tip", tip)
 
         if tip:
-            self.tip.showTip(tip, displayPoint)
+            self.tip.setLocation(displayPoint)
+            self.tip.setText(tip)
+            self.tip.show()
             
+
     def showPopup(self, event=None):
-        """show code completion popup"""
 
+        line = self.getinput()
+        # this is silly, I have to add the '.' and the other code removes it.
+        line = line[:-1] # remove \n
+        line = line + '.'
+        #print >> sys.stderr, "line:",line
+        
+        # TODO get this code into Popup
+        # TODO handle errors gracefully
         try:
-            line = self.getText()
-            list = jintrospect.getAutoCompleteList(line, self.locals, includeSingle=self.include_single_underscore_methods, includeDouble=self.include_double_underscore_methods)
-            if len(list) > 0:
-                self.popup.showMethodCompletionList(list, self.getDisplayPoint())
-
+            list = jintrospect.getAutoCompleteList(line, self.locals)
         except Exception, e:
-            print >> sys.stderr, "Error getting completion list: ", e
-            #traceback.print_exc(file=sys.stderr)
+            # TODO handle this gracefully
+            print >> sys.stderr, e
+            return
+
+        if len(list) == 0:
+            #print >> sys.stderr, "list was empty"
+            return
+
+        self.popup.setLocation(self.getDisplayPoint())
+
+        self.popup.setMethods(list)
+        self.popup.show()
+        self.popup.list.setSelectedIndex(0)
+
+    def beyondPrompt(self, considerCurrent=True, considerSelection=False):
+        """Determines wheter the cursor is in the editable area
+           (i.e. beyond the last prompt position)"""
+        caret = self.textpane.caretPosition
+        caret0 = caret
+        if considerCurrent:
+            caret = caret + 1
+        if considerSelection:
+            if self.textpane.selectedText:
+                caret = self.textpane.selectionEnd
+        if caret > self.promptPosition:
+            return True
+        return False
 
     def inLastLine(self, include = 1):
         """ Determines whether the cursor is in the last line """
         limits = self.__lastLine()
-        caret = self.text_pane.caretPosition
-        if self.text_pane.selectedText:
-            caret = self.text_pane.selectionStart
+        caret = self.textpane.caretPosition
+        if self.textpane.selectedText:
+            caret = self.textpane.selectionStart
         if include:
             return (caret >= limits[0] and caret <= limits[1])
         else:
             return (caret > limits[0] and caret <= limits[1])
 
-    def enter(self, event=None):
+    def enter(self, event):
         """ Triggered when enter is pressed """
-        text = self.getText()
+        offsets = self.__lastLine()
+        text = self.doc.getText(offsets[0], offsets[1]-offsets[0])
+        text = text[:-1] # chomp \n
         self.buffer.append(text)
         source = "\n".join(self.buffer)
         more = self.interp.runsource(source)
@@ -173,35 +221,27 @@ class Console:
 
         self.hide()
 
-    def quit(self, event=None):
-        sys.exit()
-
     def resetbuffer(self):
         self.buffer = []
 
+    # home key stops after prompt
     def home(self, event):
-        """ Triggered when HOME is pressed """
-        if self.inLastLine():
-            # go to end of PROMPT
-            self.text_pane.caretPosition = self.__lastLine()[0]
-        else:
-            lines = self.doc.rootElements[0].elementCount
-            for i in xrange(0,lines-1):
-                offsets = (self.doc.rootElements[0].getElement(i).startOffset, \
-                    self.doc.rootElements[0].getElement(i).endOffset)
-                line = self.doc.getText(offsets[0], offsets[1]-offsets[0])
-                if self.text_pane.caretPosition >= offsets[0] and \
-                    self.text_pane.caretPosition <= offsets[1]:
-                    if line.startswith(Console.PROMPT) or line.startswith(Console.PROCESS):
-                        self.text_pane.caretPosition = offsets[0] + len(Console.PROMPT)
-                    else:
-                        self.text_pane.caretPosition = offsets[0]
+		""" Triggered when HOME is pressed """
+		if self.inLastLine():
+			self.textpane.caretPosition = self.__lastLine()[0]
+		else:
+			lines = self.doc.rootElements[0].elementCount
+			for i in xrange(0,lines-1):
+				offsets = (self.doc.rootElements[0].getElement(i).startOffset, \
+					self.doc.rootElements[0].getElement(i).endOffset)
+				line = self.doc.getText(offsets[0], offsets[1]-offsets[0])
+				if self.textpane.caretPosition >= offsets[0] and \
+					self.textpane.caretPosition <= offsets[1]:
+					if line.startswith(Console.PROMPT) or line.startswith(Console.PROCESS):
+						self.textpane.caretPosition = offsets[0] + len(Console.PROMPT)
+					else:
+						self.textpane.caretPosition = offsets[0]
 
-    def end(self, event):
-        if self.inLastLine():
-            self.text_pane.caretPosition = self.__lastLine()[1] - 1
-
-    # TODO look using text_pane replace selection like self.insertText
     def replaceRow(self, text):
         """ Replaces the last line of the textarea with text """
         offset = self.__lastLine()
@@ -209,87 +249,69 @@ class Console:
         if last != "\n":
             self.doc.remove(offset[0], offset[1]-offset[0]-1)
         self.__addOutput(self.infoColor, text)
-             
+
+    def __do_delete(self, event, pos=0):
+        if self.textpane.selectedText:
+            start = max(self.textpane.selectionStart, self.promptPosition)
+            self.doc.remove(start, self.textpane.selectionEnd - start)
+        else:
+            self.doc.remove(self.textpane.caretPosition + pos, 1)
+
+    # don't allow prompt to be deleted
     def delete(self, event):
-        """ Intercepts delete events only allowing it to work in the last line """
-        if self.inLastLine():
-            if self.text_pane.selectedText:
-                self.doc.remove(self.text_pane.selectionStart, self.text_pane.selectionEnd - self.text_pane.selectionStart)
-            elif self.text_pane.caretPosition < self.doc.length:
-                self.doc.remove(self.text_pane.caretPosition, 1)
+        """ Intercepts backspace events only allowing it to work in the last line """
+        if self.beyondPrompt(considerCurrent=True, considerSelection=True):
+            self.__do_delete(event)
 
-    def backSpaceListener(self, event=None):
-        """ Don't allow backspace or left arrow to go over prompt """
-        onFirstPosition = self.text_pane.getCaretPosition() <= self.__lastLine()[0]
-        if onFirstPosition and not self.text_pane.selectedText:
-            event.consume()
-                                       
-    def spaceTyped(self, event=None):
-        """check we we should complete on the space key"""
-        matches = _re_from_import.match(self.getText())
-        if matches:
-            self.showPopup()
 
-    def killToEndLine(self, event=None):
-        if self.inLastLine():
-            caretPosition = self.text_pane.getCaretPosition()
-            self.text_pane.setSelectionStart(caretPosition)
-            self.text_pane.setSelectionEnd(self.__lastLine()[1] - 1)
-            self.text_pane.cut()
+    # don't allow prompt to be deleted
+    def backspace(self, event):
+        """ Intercepts backspace events only allowing it to work in the last line """
+        if self.beyondPrompt(considerCurrent=False, considerSelection=True):
+            self.__do_delete(event, -1)
 
-    def paste(self, event=None):
-        # if getText was smarter, this method would be unnecessary
-        if self.inLastLine():
-            clipboard = Toolkit.getDefaultToolkit().getSystemClipboard()
-            clipboard.getContents(self.text_pane)
-            contents = clipboard.getData(DataFlavor.stringFlavor)
-
-            lines = contents.split("\n")
-            for line in lines:
-                self.insertText(line)
-                if len(lines) > 1:
-                    self.enter()
-
+    # why is there a keyTyped and a keyPressed?
     def keyTyped(self, event):
-        #print >> sys.stderr, "keyTyped", event.getKeyCode()
-        if not self.inLastLine():
-            event.consume()
+        if not self.beyondPrompt():
+            self.textpane.setCaretPosition(self.doc.length)
 
     def keyPressed(self, event):
+        # skip Shift + delete and shift + backspace as the are incorrectly managed
+        if event.keyCode == KeyEvent.VK_BACK_SPACE or event.keyCode == KeyEvent.VK_DELETE:
+            if event.modifiers > 0:
+                event.consume()
+
         if self.popup.visible:
             self.popup.key(event)
-        #print >> sys.stderr, "keyPressed", event.getKeyCode()
-        if event.keyCode == KeyEvent.VK_BACK_SPACE or event.keyCode == KeyEvent.VK_LEFT:
-            self.backSpaceListener(event)
 
-    def keyboardInterrupt(self, event=None):
-        """ Raises a KeyboardInterrupt"""
-        self.hide()
-        self.interp.runsource("raise KeyboardInterrupt\n")
-        self.resetbuffer()
-        self.printPrompt()
-                
+
     # TODO refactor me
     def write(self, text):
         self.__addOutput(self.infoColor, text)
 
     def printResult(self, msg):
         """ Prints the results of an operation """
-        self.__addOutput(self.text_pane.foreground, "\n" + str(msg))
+        self.__addOutput(self.textpane.foreground, msg, True)
 
     def printError(self, msg): 
-        self.__addOutput(self.errorColor, "\n" + str(msg))
+        self.__addOutput(self.errorColor, msg, True)
 
     def printOnProcess(self):
         """ Prints the process symbol """
-        self.__addOutput(self.infoColor, "\n" + Console.PROCESS)
+        self.__addOutput(self.infoColor, Console.PROCESS, True)
 
     def printPrompt(self):
         """ Prints the prompt """
-        self.__addOutput(self.infoColor, "\n" + Console.PROMPT)
-        
-    def __addOutput(self, color, msg):
+        self.__addOutput(self.infoColor, Console.PROMPT, True)
+        self.promptPosition = self.doc.length
+		
+    def __addOutput(self, color, msg, new_line=False):
         """ Adds the output to the text area using a given color """
+        if new_line:
+            if isinstance(msg, unicode):
+                msg =  u"\n" + msg
+            else:
+                msg = "\n" + str(msg)
         from javax.swing.text import BadLocationException
         style = SimpleAttributeSet()
 
@@ -297,19 +319,19 @@ class Console:
             style.addAttribute(StyleConstants.Foreground, color)
 
         self.doc.insertString(self.doc.length, msg, style)
-        self.text_pane.caretPosition = self.doc.length
+        self.textpane.caretPosition = self.doc.length
 
     def __propertiesChanged(self):
         """ Detects when the properties have changed """
-        self.text_pane.background = Color.white #jEdit.getColorProperty("jython.bgColor")
-        self.text_pane.foreground = Color.blue #jEdit.getColorProperty("jython.resultColor")
+        self.textpane.background = Color.white #jEdit.getColorProperty("jython.bgColor")
+        self.textpane.foreground = Color.blue #jEdit.getColorProperty("jython.resultColor")
         self.infoColor = Color.black #jEdit.getColorProperty("jython.textColor")
         self.errorColor = Color.red # jEdit.getColorProperty("jython.errorColor")
 
         family = "Monospaced" # jEdit.getProperty("jython.font", "Monospaced")
         size = 14 #jEdit.getIntegerProperty("jython.fontsize", 14)
         style = Font.PLAIN #jEdit.getIntegerProperty("jython.fontstyle", Font.PLAIN)
-        self.text_pane.setFont(Font(family,style,size))
+        self.textpane.setFont(Font(family,style,size))
 
     def __inittext(self):
         """ Inserts the initial text with the jython banner """
@@ -317,50 +339,8 @@ class Console:
         for line in "\n".join(Console.BANNER):
             self.__addOutput(self.infoColor, line)
         self.printPrompt()
-        self.text_pane.requestFocus()
+        self.textpane.requestFocus()
 
-    def __initKeyMap(self):
-        os_name = System.getProperty("os.name")
-        if os_name.startswith("Win"):
-            exit_key = KeyEvent.VK_Z
-            interrupt_key = KeyEvent.VK_PAUSE # BREAK
-        else:
-            exit_key = KeyEvent.VK_D
-            interrupt_key = KeyEvent.VK_C
-
-        keyBindings = [
-            (KeyEvent.VK_ENTER, 0, "jython.enter", self.enter),
-            (KeyEvent.VK_DELETE, 0, "jython.delete", self.delete),
-            (KeyEvent.VK_HOME, 0, "jython.home", self.home),
-            (KeyEvent.VK_LEFT, InputEvent.META_DOWN_MASK, "jython.home", self.home),
-            (KeyEvent.VK_UP, 0, "jython.up", self.history.historyUp),
-            (KeyEvent.VK_DOWN, 0, "jython.down", self.history.historyDown),
-            (KeyEvent.VK_PERIOD, 0, "jython.showPopup", self.showPopup),
-            (KeyEvent.VK_ESCAPE, 0, "jython.hide", self.hide),
-
-            ('(', 0, "jython.showTip", self.showTip),
-            (')', 0, "jython.hideTip", self.hideTip),
-            (exit_key, InputEvent.CTRL_MASK, "jython.exit", self.quit),
-            (KeyEvent.VK_SPACE, InputEvent.CTRL_MASK, "jython.showPopup", self.showPopup),
-            (KeyEvent.VK_SPACE, 0, "jython.space", self.spaceTyped),
-
-            # explicitly set paste since we're overriding functionality
-            (KeyEvent.VK_V, Toolkit.getDefaultToolkit().getMenuShortcutKeyMask(), "jython.paste", self.paste),
-
-            # Mac/Emacs keystrokes
-            (KeyEvent.VK_A, InputEvent.CTRL_MASK, "jython.home", self.home),
-            (KeyEvent.VK_E, InputEvent.CTRL_MASK, "jython.end", self.end),
-            (KeyEvent.VK_K, InputEvent.CTRL_MASK, "jython.killToEndLine", self.killToEndLine),
-            (KeyEvent.VK_Y, InputEvent.CTRL_MASK, "jython.paste", self.paste),
-            
-            (interrupt_key, InputEvent.CTRL_MASK, "jython.keyboardInterrupt", self.keyboardInterrupt),
-            ]
-
-        keymap = JTextComponent.addKeymap("jython", self.text_pane.keymap)
-        for (key, modifier, name, function) in keyBindings:
-            keymap.addActionForKeyStroke(KeyStroke.getKeyStroke(key, modifier), ActionDelegator(name, function))
-        self.text_pane.keymap = keymap
-        
     def __lastLine(self):
         """ Returns the char offests of the last line """
         lines = self.doc.rootElements[0].elementCount
@@ -373,30 +353,32 @@ class Console:
 
 
 class ActionDelegator(TextAction):
-    """
-        Class action delegator encapsulates a TextAction delegating the action
-        event to a simple function
-    """
-    def __init__(self, name, delegate):
-        TextAction.__init__(self, name)
-        self.delegate = delegate
+	"""
+		Class action delegator encapsulates a TextAction delegating the action
+		event to a simple function
+	"""
+	def __init__(self, name, delegate):
+		TextAction.__init__(self, name)
+		self.delegate = delegate
 
-    def actionPerformed(self, event):
-        if isinstance(self.delegate, Action):
-            self.delegate.actionPerformed(event)
-        else:
-            self.delegate(event)
+	def actionPerformed(self, event):
+		if isinstance(self.delegate, Action):
+			self.delegate.actionPerformed(event)
+		else:
+			self.delegate(event)
 
 class Interpreter(InteractiveInterpreter):
     def __init__(self, console, locals):
         InteractiveInterpreter.__init__(self, locals)
         self.console = console
         
+        
     def write(self, data):
         # send all output to the textpane
         # KLUDGE remove trailing linefeed
         self.console.printError(data[:-1])
         
+
 # redirect stdout to the textpane
 class StdOutRedirector:
     def __init__(self, console):
@@ -412,28 +394,14 @@ class JythonFrame(JFrame):
     def __init__(self):
         self.title = "Jython"
         self.size = (600, 400)
-        try:
-            self.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
-        except:
-            # assume jdk < 1.4
-            self.addWindowListener(KillListener())
-            self.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE)
+        self.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE)
 
-class KillListener(WindowAdapter):
-    """
-    Handle EXIT_ON_CLOSE for jdk < 1.4
-    Thanks to James Richards for this method
-    """
-    def windowClosed(self, evt):
-        import java.lang.System as System
-        System.exit(0)
-        
-def main(namespace=None):
+
+def main():
     frame = JythonFrame()
-    console = Console(namespace)
-    frame.getContentPane().add(JScrollPane(console.text_pane))
-    frame.visible = True
-
+    console = Console(frame)
+    frame.getContentPane().add(JScrollPane(console.textpane))
+    frame.show()
+    
 if __name__ == "__main__":
     main()
-    

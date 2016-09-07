@@ -1,11 +1,12 @@
 from java.lang import Character
 from javax.swing import JWindow, JList, JScrollPane
 from java.awt import Color, Dimension
+from java.awt.event import KeyAdapter
 from java.awt.event import KeyEvent
-import sys
+import string
 
 __author__ = "Don Coleman <dcoleman@chariotsolutions.com>"
-__cvsid__ = "$Id: popup.py,v 1.9 2003/05/01 03:43:53 dcoleman Exp $"
+__cvsid__ = "$Id: popup.py 5782 2006-06-12 07:56:49Z jmvivo $"
 
 class Popup(JWindow):
     """Popup window to display list of methods for completion"""
@@ -28,11 +29,10 @@ class Popup(JWindow):
         self.typed = ""
 
     def key(self, e):
-        # print >> sys.stderr, "Other Listener"
-        if not self.visible:
-            return
-
+        # key listener
+        #print "Other Listener"
         code = e.getKeyCode()
+        #print 'keychar:',e.getKeyChar()
         
         if code == KeyEvent.VK_ESCAPE:
             self.hide()
@@ -41,46 +41,22 @@ class Popup(JWindow):
             self.chooseSelected()
             e.consume()
 
-        elif code == KeyEvent.VK_SPACE:
-            # TODO for functions: choose the selected option, add parenthesis
-            # and put the cursor between them.  example: obj.function(^cursor_here)
-            self.chooseSelected()
-
-        elif code == KeyEvent.VK_PERIOD:
-            self.chooseSelected()
-            #e.consume()
-            
-        # This fails because the key listener in console gets it first
-        elif code == KeyEvent.VK_LEFT_PARENTHESIS:
-            self.chooseSelected()
-
         elif code == 8: # BACKSPACE
-            if len(self.typed) == 0:
-                self.hide()
             self.typed = self.typed[:-1]
-            print >> sys.stderr, self.typed
             self.data = filter(self.originalData, self.typed)
             self.list.setListData(self.data)
             self.list.setSelectedIndex(0)
                 
         elif code == KeyEvent.VK_UP:
-            self.up()
+            self.previous()
             # consume event to avoid history previous
             e.consume()
             
         elif code == KeyEvent.VK_DOWN:
-            self.down()
+            self.next()
             # consume event to avoid history next
             e.consume()
             
-        elif code == KeyEvent.VK_PAGE_UP:
-            self.pageUp()
-            e.consume()
-
-        elif code == KeyEvent.VK_PAGE_DOWN:
-            self.pageDown()
-            e.consume()
-
         else:
             char = e.getKeyChar()
             if Character.isJavaLetterOrDigit(char):
@@ -89,49 +65,34 @@ class Popup(JWindow):
                 self.list.setListData(self.data)
                 self.list.setSelectedIndex(0)
                 
-    def down(self):
+    def next(self):
         index = self.list.getSelectedIndex()
-        max = self.getListSize() - 1
+        max = (self.list.getModel().getSize() - 1)
         
         if index < max:
             index += 1
-            self.setSelected(index)
+            self.list.setSelectedIndex(index)
+            self.list.ensureIndexIsVisible(index)
         
-    def up(self):
+    def previous(self):
         index = self.list.getSelectedIndex()
 
         if index > 0:
             index -= 1
-            self.setSelected(index)
-
-    def pageUp(self):
-        index = self.list.getSelectedIndex()
-        visibleRows = self.list.getVisibleRowCount()
-        index = max(index - visibleRows, 0)
-        self.setSelected(index)
-
-    def pageDown(self):
-        index = self.list.getSelectedIndex()
-        visibleRows = self.list.getVisibleRowCount()
-        index = min(index + visibleRows, self.getListSize() - 1)
-        self.setSelected(index)
-
-    def setSelected(self, index):
-        self.list.setSelectedIndex(index)
-        self.list.ensureIndexIsVisible(index)
-
-    def getListSize(self):
-        return self.list.getModel().getSize()
+            self.list.setSelectedIndex(index)
+            self.list.ensureIndexIsVisible(index)
 
     def chooseSelected(self):
         """Choose the selected value in the list"""
-        value = self.list.getSelectedValue()
-        if value != None:
+        try:
+            value = self.list.getSelectedValue()
             startPosition = self.dotPosition + 1
             caretPosition = self.textComponent.getCaretPosition()
             self.textComponent.select(startPosition, caretPosition) 
             self.textComponent.replaceSelection(value)
             self.textComponent.setCaretPosition(startPosition + len(value))
+        except:
+            pass
         self.hide()
 
     def setMethods(self, methodList):
@@ -146,13 +107,7 @@ class Popup(JWindow):
         # so we know how to replace the selection
         self.dotPosition = self.textComponent.getCaretPosition()
         self.setSize(self.getPreferredSize())
-        self.super__show()
-
-    def showMethodCompletionList(self, list, displayPoint):
-        self.setLocation(displayPoint)
-        self.setMethods(list)
-        self.show()
-        self.list.setSelectedIndex(0)
+        JWindow.show(self)
 
     def getPreferredSize(self):
         # need to add a magic amount to the size to avoid scrollbars
@@ -166,7 +121,7 @@ class Popup(JWindow):
         if width > Popup.MAX_WIDTH:
             width = Popup.MAX_WIDTH
         if width < Popup.MIN_WIDTH:
-            width = Popup.MIN_WIDTH
+            widht = Popup.MIN_WIDTH
         return Dimension(width, height)
 
     

@@ -2,19 +2,21 @@ from java.awt import Color, Dimension
 from javax.swing import JWindow, JTextArea, JScrollPane
 
 __author__ = "Don Coleman <dcoleman@chariotsolutions.com>"
-__cvsid__ = "$Id: tip.py,v 1.3 2003/05/01 03:43:53 dcoleman Exp $"
+__cvsid__ = "$Id: tip.py 5782 2006-06-12 07:56:49Z jmvivo $"
 
 class Tip(JWindow):
     """
-    Window which provides the user with information about the method.
+    Window which provides the user with information about the method
     For Python, this shows arguments, and the documention
     For Java, this shows the signature(s) and return type
     """
+    # TODO handle java methods with many overload more gracefully
     MAX_HEIGHT = 300
     MAX_WIDTH = 400
     
     def __init__(self, frame):
         JWindow.__init__(self, frame)
+        #self.size = (300,150)
         self.textarea = JTextArea()
         # TODO put this color with all the other colors
         self.textarea.setBackground(Color(225,255,255))
@@ -40,8 +42,4 @@ class Tip(JWindow):
         if width > Tip.MAX_WIDTH:
             width = Tip.MAX_WIDTH
         return Dimension(width, height)
-
-    def showTip(self, tip, displayPoint):
-        self.setLocation(displayPoint)
-        self.setText(tip)
-        self.show()
+        

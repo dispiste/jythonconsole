@@ -16,67 +16,40 @@
  along with this program; if not, write to the Free Software
  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 """
+#from org.gjt.sp.jedit.gui import HistoryModel
 
-from java.lang import System, Runtime
-from java.lang import Runnable, Thread
-
-class History(Runnable):
+class History:
     """
-    Command line history
+    The class history handles the history management basically wrapping the
+    built-in jEdit's history capabilities
     """
-    
-    default_history_file = System.getProperty("user.home") + '/.jythonconsole.history'
-    MAX_SIZE = 200
 
-    def __init__(self, console, history_file=default_history_file):
-        Runtime.getRuntime().addShutdownHook(Thread(self))        
-
-        self.history_file = history_file
+    def __init__(self, console):
         self.history = []
-        self.loadHistory()            
-          
-        self.console = console
-        self.index = len(self.history) - 1
-        self.last = ""
+	self.console = console
+	self.index = 0
+	self.last = ""
 
     def append(self, line):
-        if line == None or line == '\n' or len(line) == 0:
-            return
+        if line == '\n' or len(line) == 0: return
+## 	if line == self.last: # avoid duplicates
+## 	    self.index = len(self.history) - 1
+##          return
+		
+	self.last = line
+	self.history.append(line)
+	self.index = len(self.history) - 1
 
-        if line != self.last: # avoids duplicates
-            self.last = line
-            self.history.append(line)
-            
-        self.index = len(self.history) - 1
-
-    def historyUp(self, event=None):
+    def historyUp(self, event):
         if len(self.history) > 0 and self.console.inLastLine():
-            self.console.replaceRow(self.history[self.index])
-            self.index = max(self.index - 1, 0)
+	    self.console.replaceRow(self.history[self.index])
+	    self.index = max(self.index - 1, 0)
 
-    def historyDown(self, event=None):
+    def historyDown(self, event):
         if len(self.history) > 0 and self.console.inLastLine():
-            if self.index == len(self.history) - 1:
-                self.console.replaceRow("")
-            else:
-                self.index += 1
-                self.console.replaceRow(self.history[self.index])
+	    if self.index == len(self.history) - 1:
+	        self.console.replaceRow("")
+	    else:
+	        self.index += 1
+	        self.console.replaceRow(self.history[self.index])
 
-    def loadHistory(self):
-        try:
-            f = open(self.history_file)
-            for line in f.readlines():
-                self.history.append(line[:-1])
-            f.close()
-        except:
-            pass
-        
-    def saveHistory(self):
-        f = open(self.history_file, 'w')
-        for item in self.history[-self.MAX_SIZE:]:
-            f.write("%s\n" % item)
-        f.flush()
-        f.close()
-        
-    def run(self):
-        self.saveHistory()

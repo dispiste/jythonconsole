@@ -14,6 +14,7 @@ Hints:
 
 Author:
   Don Coleman <dcoleman@chariotsolutions.com>
+  Small improvements by gvSIG Association: http://www.gvsig.com
 
 License:
   Read the COPYING.txt file.
